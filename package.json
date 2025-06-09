@@ -7,6 +7,6 @@
     "pg": "^8.16.0"
   },
   "scripts": {
-    "start": "node get_holders_ethplorer.js 0x31c8eacbffdd875c74b94b077895bd78cf1e64a3 0xc64500dd7b0f1794807e67802f8abbf5f8ffb054"
+    "start": "node get_holders_ethplorer.js 0x31c8eacbffdd875c74b94b077895bd78cf1e64a3 0xc64500dd7b0f1794807e67802f8abbf5f8ffb054 0xcb86c6a22cb56b6cf40cafedb06ba0df188a416e 0xc98d64da73a6616c42117b582e832812e7b8d57f"
   }
 }
