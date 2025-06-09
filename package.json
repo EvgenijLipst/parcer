@@ -6,6 +6,6 @@
     "axios": "^1.9.0"
   },
   "scripts": {
-    "start": "node get_holders_ethplorer.js"
+    "start": "node get_holders_ethplorer.js 0x31c8eacbffdd875c74b94b077895bd78cf1e64a3 0xc64500dd7b0f1794807e67802f8abbf5f8ffb054"
   }
 }
