@@ -1,11 +1,9 @@
 const axios = require('axios');
 const { Pool } = require('pg');
 
-// Подключение к Railway Postgres
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 (async () => {
-  // 1. Создаём таблицу holders, если нет
   await pool.query(`
     CREATE TABLE IF NOT EXISTS holders (
       id SERIAL PRIMARY KEY,
@@ -17,16 +15,17 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
     )
   `);
 
-  // 2. Берём контракты из аргументов
   const contracts = process.argv.slice(2);
   if (!contracts.length) {
     console.error("Usage: node get_holders_ethplorer.js <contract1> [contract2]…");
     process.exit(1);
   }
 
-  // 3. Запрашиваем данные и собираем в массив
   const results = [];
   for (const c of contracts) {
+    // пауза между запросами
+    await new Promise(res => setTimeout(res, 1000));
+
     try {
       const { data } = await axios.get(
         `https://api.ethplorer.io/getTokenInfo/${c}?apiKey=freekey`
@@ -37,10 +36,8 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
     }
   }
 
-  // 4. Логируем для отладки
   console.table(results);
 
-  // 5. Сохраняем в таблицу holders
   for (const r of results) {
     await pool.query(
       `INSERT INTO holders(contract,symbol,holders,error) VALUES($1,$2,$3,$4)`,
@@ -48,7 +45,6 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
     );
   }
 
-  // 6. Завершаем подключение и выходим
   await pool.end();
   console.log("✅ Сохранено в holders");
 })().catch(e => {
