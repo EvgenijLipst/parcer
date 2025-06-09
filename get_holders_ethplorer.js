@@ -1,47 +1,57 @@
-// get_holders_ethplorer.js
-// npm install axios
-
 const axios = require('axios');
+const { Pool } = require('pg');
+
+// Подключение к Railway Postgres
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 (async () => {
+  // 1. Создаём таблицу holders, если нет
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS holders (
+      id SERIAL PRIMARY KEY,
+      contract TEXT,
+      symbol   TEXT,
+      holders  INTEGER,
+      error    TEXT,
+      parsed_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  // 2. Берём контракты из аргументов
   const contracts = process.argv.slice(2);
-  if (contracts.length === 0) {
-    console.error('Usage: node get_holders_ethplorer.js <contract1> [contract2] [contract3] …');
+  if (!contracts.length) {
+    console.error("Usage: node get_holders_ethplorer.js <contract1> [contract2]…");
     process.exit(1);
   }
 
-  // Публичный ключ Ethplorer
-  const API_KEY = 'freekey';
-  const UA      = { 'User-Agent': 'Mozilla/5.0' };
-
-  // Для каждого контракта делаем запрос к Ethplorer
-  const jobs = contracts.map(async (contract) => {
+  // 3. Запрашиваем данные и собираем в массив
+  const results = [];
+  for (const c of contracts) {
     try {
-      const url  = `https://api.ethplorer.io/getTokenInfo/${contract}?apiKey=${API_KEY}`;
-      const { data } = await axios.get(url, { headers: UA });
-      if (data.error) throw new Error(data.error.message);
-      return {
-        contract,
-        symbol: data.symbol || '',
-        holders: typeof data.holdersCount === 'number'
-          ? data.holdersCount
-          : null
-      };
+      const { data } = await axios.get(
+        `https://api.ethplorer.io/getTokenInfo/${c}?apiKey=freekey`
+      );
+      results.push({ contract: c, symbol: data.symbol, holders: data.holdersCount, error: "" });
     } catch (e) {
-      return { contract, symbol: '', holders: null, error: e.message };
+      results.push({ contract: c, symbol: "", holders: 0, error: e.message });
     }
-  });
+  }
 
-  // Ждём всех запросов
-  const results = await Promise.all(jobs);
+  // 4. Логируем для отладки
+  console.table(results);
 
-  // Выводим в виде таблицы
-  console.table(
-    results.map(r => ({
-      Contract: r.contract,
-      Symbol:   r.symbol,
-      Holders:  r.holders != null ? r.holders.toLocaleString() : 'Error',
-      Error:    r.error || ''
-    }))
-  );
-})();
+  // 5. Сохраняем в таблицу holders
+  for (const r of results) {
+    await pool.query(
+      `INSERT INTO holders(contract,symbol,holders,error) VALUES($1,$2,$3,$4)`,
+      [r.contract, r.symbol, r.holders, r.error]
+    );
+  }
+
+  // 6. Завершаем подключение и выходим
+  await pool.end();
+  console.log("✅ Сохранено в holders");
+})().catch(e => {
+  console.error(e);
+  process.exit(1);
+});
