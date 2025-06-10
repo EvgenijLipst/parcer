@@ -1,48 +1,34 @@
-// get_holders_ethplorer.js
-// Импортируем необходимые библиотеки
+// get_holders_ethplorer.js (ИСПРАВЛЕННАЯ ВЕРСИЯ)
 const axios = require('axios');
 const { Pool } = require('pg');
 
-// --- НАСТРОЙКИ, КОТОРЫЕ МОЖНО ЛЕГКО МЕНЯТЬ ---
 const CONFIG = {
-    // Пороги роста в процентах для отправки алертов
     growthThresholds: {
-        vsPrevious: 0.3, // с момента прошлой записи (30 мин)
+        vsPrevious: 0.3,
         last1Hour: 0.8,
         last3Hours: 1.0,
         last12Hours: 3.0,
         last24Hours: 5.0,
     },
-    // Настройки для API
     telegram: {
-        botToken: process.env.TELEGRAM_BOT_TOKEN, // Токен вашего бота
-        chatId: process.env.TELEGRAM_CHAT_ID,     // ID вашего чата или канала
+        botToken: process.env.TELEGRAM_BOT_TOKEN,
+        chatId: process.env.TELEGRAM_CHAT_ID,
     },
     openai: {
-        apiKey: process.env.OPENAI_API_KEY,       // Ваш API ключ OpenAI
-        model: 'gpt-4o',                       // Модель для анализа
+        apiKey: process.env.OPENAI_API_KEY,
+        model: 'gpt-4o',
     },
-    // Интервал удаления старых данных
     cleanupIntervalHours: 24,
 };
 
-// --- КОНЕЦ НАСТРОЕК ---
-
-
-// Инициализация пула соединений с базой данных PostgreSQL
-// URL берется из переменных окружения Railway (DATABASE_URL)
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: {
-        rejectUnauthorized: false // Часто требуется для подключения к облачным базам данных
-    }
+    ssl: { rejectUnauthorized: false }
 });
 
-// Основная асинхронная функция
 (async () => {
     console.log('Запуск скрипта...');
 
-    // 1. Создание таблицы, если она не существует
     await pool.query(`
         CREATE TABLE IF NOT EXISTS holders (
             id SERIAL PRIMARY KEY,
@@ -54,26 +40,22 @@ const pool = new Pool({
         )
     `);
 
-    // 2. Получение списка контрактов из аргументов командной строки
     const contracts = process.argv.slice(2);
     if (!contracts.length) {
         console.error("Ошибка: Не указаны адреса контрактов для парсинга.");
-        console.error("Пример: node get_holders_ethplorer.js <contract1> [contract2]…");
         process.exit(1);
     }
     console.log(`Получено ${contracts.length} контрактов для обработки.`);
 
-    // 3. Парсинг данных о холдерах
     const newRecords = [];
     for (const contract of contracts) {
-        await new Promise(res => setTimeout(res, 1000)); // Пауза для обхода rate limit'ов API
-
+        await new Promise(res => setTimeout(res, 1000));
         try {
             const { data } = await axios.get(`https://api.ethplorer.io/getTokenInfo/${contract}?apiKey=freekey`);
             if (data.symbol && data.holdersCount) {
                 newRecords.push({ contract, symbol: data.symbol, holders: data.holdersCount, error: "" });
             } else {
-                 newRecords.push({ contract, symbol: 'N/A', holders: 0, error: "Invalid data from API" });
+                newRecords.push({ contract, symbol: 'N/A', holders: 0, error: "Invalid data from API" });
             }
         } catch (e) {
             newRecords.push({ contract, symbol: 'N/A', holders: 0, error: e.message });
@@ -82,9 +64,8 @@ const pool = new Pool({
     console.log('Данные о холдерах успешно спарсены:');
     console.table(newRecords);
 
-    // 4. Запись новых данных в базу
     for (const r of newRecords) {
-        if (r.error) continue; // Не записываем и не анализируем ошибочные записи
+        if (r.error) continue;
         await pool.query(
             `INSERT INTO holders(contract, symbol, holders, error) VALUES($1, $2, $3, $4)`,
             [r.contract, r.symbol, r.holders, r.error]
@@ -92,14 +73,14 @@ const pool = new Pool({
     }
     console.log(`✅ ${newRecords.filter(r => !r.error).length} новых записей сохранено в базу.`);
 
-    // 5. Анализ роста и отправка алертов для каждой новой записи
     console.log('\n--- Начало анализа роста ---');
     for (const record of newRecords) {
-        if (record.error) continue; // Пропускаем анализ, если при парсинге была ошибка
+        if (record.error || !record.holders) continue; 
 
+        // ИСПРАВЛЕНИЕ: Теперь мы запрашиваем ТОЛЬКО исторические данные.
+        // Текущее значение берется из памяти (record.holders).
         const historyQuery = `
             SELECT
-                (SELECT h.holders FROM holders h WHERE h.contract = $1 ORDER BY h.parsed_at DESC LIMIT 1) AS current_holders,
                 (SELECT h.holders FROM holders h WHERE h.contract = $1 ORDER BY h.parsed_at DESC LIMIT 1 OFFSET 1) AS prev_holders,
                 (SELECT h.holders FROM holders h WHERE h.contract = $1 AND h.parsed_at <= NOW() - INTERVAL '1 hour' ORDER BY h.parsed_at DESC LIMIT 1) AS h1_holders,
                 (SELECT h.holders FROM holders h WHERE h.contract = $1 AND h.parsed_at <= NOW() - INTERVAL '3 hours' ORDER BY h.parsed_at DESC LIMIT 1) AS h3_holders,
@@ -107,19 +88,21 @@ const pool = new Pool({
                 (SELECT h.holders FROM holders h WHERE h.contract = $1 AND h.parsed_at <= NOW() - INTERVAL '24 hours' ORDER BY h.parsed_at DESC LIMIT 1) AS h24_holders
         `;
         const { rows: [history] } = await pool.query(historyQuery, [record.contract]);
-        
-        // --- ОТЛАДОЧНАЯ СТРОКА ДЛЯ ПРОВЕРКИ ---
-        console.log(`[DEBUG] Данные для анализа ${record.symbol}:`, history);
-        // -----------------------------------------
 
-        if (!history || !history.current_holders) continue;
+        // Мы больше не используем отладочный лог, так как исправили логику.
+        // Если захотите вернуть, можете вставить его сюда.
+
+        if (!history) continue;
+
+        // ИСПРАВЛЕНИЕ: Используем `record.holders` как текущее значение.
+        const currentHolders = record.holders;
 
         const growth = {
-            vsPrevious: calculateGrowth(history.current_holders, history.prev_holders),
-            last1Hour: calculateGrowth(history.current_holders, history.h1_holders),
-            last3Hours: calculateGrowth(history.current_holders, history.h3_holders),
-            last12Hours: calculateGrowth(history.current_holders, history.h12_holders),
-            last24Hours: calculateGrowth(history.current_holders, history.h24_holders),
+            vsPrevious: calculateGrowth(currentHolders, history.prev_holders),
+            last1Hour: calculateGrowth(currentHolders, history.h1_holders),
+            last3Hours: calculateGrowth(currentHolders, history.h3_holders),
+            last12Hours: calculateGrowth(currentHolders, history.h12_holders),
+            last24Hours: calculateGrowth(currentHolders, history.h24_holders),
         };
 
         const shouldAlert =
@@ -131,7 +114,6 @@ const pool = new Pool({
 
         if (shouldAlert) {
             console.log(`[ALERT] Обнаружен значительный рост для токена ${record.symbol} (${record.contract})`);
-            
             const alertPayload = {
                 timestamp: new Date().toISOString(),
                 symbol: record.symbol,
@@ -142,7 +124,6 @@ const pool = new Pool({
                 growth_12h: `${growth.last12Hours.toFixed(2)}%`,
                 growth_24h: `${growth.last24Hours.toFixed(2)}%`,
             };
-
             await sendTelegramAlert(alertPayload);
             await sendOpenAIAlert(alertPayload);
         } else {
@@ -151,12 +132,9 @@ const pool = new Pool({
     }
     console.log('--- Анализ роста завершен ---\n');
 
-
-    // 6. Удаление старых данных
-    console.log(`Удаление данных старше ${CONFIG.cleanupIntervalHours} часов...`);
-    const deleteResult = await pool.query(`
-        DELETE FROM holders WHERE parsed_at < NOW() - INTERVAL '${CONFIG.cleanupIntervalHours} hours'
-    `);
+    const deleteResult = await pool.query(
+        `DELETE FROM holders WHERE parsed_at < NOW() - INTERVAL '${CONFIG.cleanupIntervalHours} hours'`
+    );
     console.log(`🧹 Удалено ${deleteResult.rowCount} старых записей.`);
 
 })().catch(e => {
@@ -166,9 +144,6 @@ const pool = new Pool({
     await pool.end();
     console.log('Работа скрипта завершена. Соединение с базой данных закрыто.');
 });
-
-
-// --- Вспомогательные функции ---
 
 function calculateGrowth(current, previous) {
     if (previous === null || previous === undefined || current <= previous) {
