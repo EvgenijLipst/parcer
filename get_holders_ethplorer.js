@@ -1,4 +1,4 @@
-// get_holders_ethplorer.js (ФИНАЛЬНАЯ ПРОИЗВОДСТВЕННАЯ ВЕРСИЯ)
+// get_holders_ethplorer.js (ИСТИННАЯ ФИНАЛЬНАЯ ВЕРСИЯ)
 const axios = require('axios');
 const { Pool } = require('pg');
 
@@ -45,7 +45,7 @@ const pool = new Pool({
 
     const newRecords = [];
     for (const contract of contracts) {
-        if (!contract) continue;
+        if (!contract) continue; // Пропускаем пустые аргументы
         await new Promise(res => setTimeout(res, 1000));
         try {
             const { data } = await axios.get(`https://api.ethplorer.io/getTokenInfo/${contract}?apiKey=freekey`);
@@ -118,13 +118,19 @@ const pool = new Pool({
     process.exit(1);
 }).finally(async () => {
     await pool.end();
-    console.log('Работа скрипта завершена.');
+    console.log('Работа скрипта завершена. Соединение с базой данных закрыто.');
 });
 
 // --- Вспомогательные функции ---
 function calculateGrowth(current, previous) { if (previous === null || previous === undefined || current <= previous) { return 0; } return ((current - previous) / previous) * 100; }
+
 async function sendTelegramAlert(payload) { if (!CONFIG.telegram.botToken || !CONFIG.telegram.chatId) { console.warn('Переменные для Telegram не настроены. Алерт пропущен.'); return; } const message = `📈 **Обнаружен рост холдеров!**\n-----------------------------------\n**Токен:** ${payload.symbol}\n**Контракт:** \`${payload.contract}\`\n**Время:** ${payload.timestamp}\n-----------------------------------\n**Рост с прошлой записи:** ${payload.growth_vs_previous}\n**Рост за 1 час:** ${payload.growth_1h}\n**Рост за 3 часа:** ${payload.growth_3h}\n**Рост за 12 часов:** ${payload.growth_12h}\n**Рост за 24 часа:** ${payload.growth_24h}`; const url = `https://api.telegram.org/bot${CONFIG.telegram.botToken}/sendMessage`; try { await axios.post(url, { chat_id: CONFIG.telegram.chatId, text: message, parse_mode: 'Markdown' }); console.log(`🚀 Алерт для ${payload.symbol} успешно отправлен в Telegram.`); } catch (error) { console.error('Ошибка отправки алерта в Telegram:', error.response ? error.response.data : error.message); } }
-async function sendOpenAIAlert(payload) { if (!CONFIG.openai.apiKey) { console.warn('API ключ OpenAI не настроен. Запрос пропущен.'); return; } const systemPrompt = `Выступай в роли **старшего криптовалютного аналитика** с 10-летним опытом работы в ведущих венчурных фондах и аналитических компаниях (таких как Messari, Nansen, Glassnode). Твой стиль — объективный, сжатый, основанный на данных. Ты умеешь быстро отделять хайп от реальных фактов. Твоя задача — провести **мгновенный и всесторонний 360-градусный анализ** токена, используя предоставленные данные как отправную точку, и представить результат в виде структурированного отчета на русском языке.`; const userPromptTemplate = `
+
+async function sendOpenAIAlert(payload) {
+    if (!CONFIG.openai.apiKey) { console.warn('API ключ OpenAI не настроен. Запрос пропущен.'); return; }
+    
+    const systemPrompt = `Выступай в роли **старшего криптовалютного аналитика** с 10-летним опытом работы в ведущих венчурных фондах и аналитических компаниях (таких как Messari, Nansen, Glassnode). Твой стиль — объективный, сжатый, основанный на данных. Ты умеешь быстро отделять хайп от реальных фактов. Твоя задача — провести **мгновенный и всесторонний 360-градусный анализ** токена, используя предоставленные данные как отправную точку, и представить результат в виде структурированного отчета на русском языке.`;
+    const userPromptTemplate = `
 # КОНТЕКСТ СИГНАЛА
 Я предоставляю тебе оперативные данные о росте числа холдеров определенного токена. Этот рост может быть сигналом о потенциальных событиях, повышенном интересе или маркетинговой активности.
 # ВХОДНЫЕ ДАННЫЕ ДЛЯ АНАЛИЗА
@@ -160,13 +166,23 @@ async function sendOpenAIAlert(payload) { if (!CONFIG.openai.apiKey) { console.w
     
     console.log(`Отправка запроса в OpenAI для токена ${payload.symbol}...`);
     try {
-        const response = await axios.post('https://api.openai.com/v1/chat/completions', { model: CONFIG.openai.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: finalUserPrompt }] }, { headers: { 'Authorization': `Bearer ${CONFIG.openai.apiKey}` }});
+        const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+            model: CONFIG.openai.model,
+            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: finalUserPrompt }]
+        }, { headers: { 'Authorization': `Bearer ${CONFIG.openai.apiKey}` }});
+
         const analysisText = response.data.choices[0].message.content;
         console.log(`🧠 Аналитический отчет от OpenAI для ${payload.symbol} успешно получен.`);
+
         if (analysisText) {
             const reportMessage = `🤖 **Аналитический отчет по ${payload.symbol}**:\n\n${analysisText}`;
             const url = `https://api.telegram.org/bot${CONFIG.telegram.botToken}/sendMessage`;
-            await axios.post(url, { chat_id: CONFIG.telegram.chatId, text: reportMessage, parse_mode: 'Markdown' });
+            
+            await axios.post(url, { 
+                chat_id: CONFIG.telegram.chatId, 
+                text: reportMessage, 
+                parse_mode: 'Markdown' 
+            });
             console.log(`✅ Отчет по ${payload.symbol} успешно отправлен в Telegram.`);
         }
     } catch (error) { console.error('Ошибка в процессе запроса к OpenAI или отправки отчета:', error.response ? error.response.data.error.message : error.message); }
