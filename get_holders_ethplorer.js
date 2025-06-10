@@ -1,4 +1,4 @@
-// get_holders_ethplorer.js (ИСТИННАЯ ФИНАЛЬНАЯ ВЕРСИЯ)
+// get_holders_ethplorer.js (ФИНАЛЬНАЯ ВЕРСИЯ 4.2: НАСТРАИВАЕМАЯ ПАУЗА)
 const axios = require('axios');
 const { Pool } = require('pg');
 
@@ -7,6 +7,7 @@ const CONFIG = {
     telegram: { botToken: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID },
     openai: { apiKey: process.env.OPENAI_API_KEY, model: 'gpt-4o' },
     cleanupIntervalHours: 24,
+    apiPauseMs: 1500, // <--- ИЗМЕНЕНИЕ: Пауза между запросами к API в миллисекундах
 };
 
 const pool = new Pool({
@@ -20,8 +21,10 @@ const pool = new Pool({
     let contracts;
     let testPreviousValue = null;
     let testContract = null;
+    let isTestMode = false;
 
     if (process.argv[2] === '--test') {
+        isTestMode = true;
         testContract = process.argv[3];
         testPreviousValue = process.argv[4] ? parseInt(process.argv[4], 10) : null;
         contracts = [testContract];
@@ -35,7 +38,7 @@ const pool = new Pool({
         contracts = process.argv.slice(2);
     }
 
-    if (!contracts || !contracts.length || (contracts.length === 1 && contracts[0] === undefined)) {
+    if (!contracts || !contracts.length || (contracts.length === 1 && !contracts[0])) {
         console.error("Ошибка: Не указаны адреса контрактов для парсинга.");
         process.exit(1);
     }
@@ -45,8 +48,9 @@ const pool = new Pool({
 
     const newRecords = [];
     for (const contract of contracts) {
-        if (!contract) continue; // Пропускаем пустые аргументы
-        await new Promise(res => setTimeout(res, 1000));
+        if (!contract) continue;
+        // <--- ИЗМЕНЕНИЕ: Используем значение паузы из CONFIG
+        await new Promise(res => setTimeout(res, CONFIG.apiPauseMs)); 
         try {
             const { data } = await axios.get(`https://api.ethplorer.io/getTokenInfo/${contract}?apiKey=freekey`);
             if (data.address && data.symbol && data.holdersCount) {
@@ -83,7 +87,7 @@ const pool = new Pool({
 
         if (!history) continue;
         
-        if (testPreviousValue !== null && testContract && record.contract && record.contract.toLowerCase() === testContract.toLowerCase()) {
+        if (isTestMode && record.contract.toLowerCase() === testContract.toLowerCase()) {
             history.prev_holders = testPreviousValue;
             console.log(`[РЕЖИМ ТЕСТА] Для ${record.symbol} используется поддельное предыдущее значение: ${testPreviousValue}`);
         }
@@ -102,7 +106,12 @@ const pool = new Pool({
         if (shouldAlert) {
             console.log(`[ALERT] Обнаружен значительный рост для токена ${record.symbol} (${record.contract})`);
             const alertPayload = { timestamp: new Date().toISOString(), symbol: record.symbol, contract: record.contract, growth_vs_previous: `${growth.vsPrevious.toFixed(2)}%`, growth_1h: `${growth.last1Hour.toFixed(2)}%`, growth_3h: `${growth.last3Hours.toFixed(2)}%`, growth_12h: `${growth.last12Hours.toFixed(2)}%`, growth_24h: `${growth.last24Hours.toFixed(2)}%`};
+            
             await sendTelegramAlert(alertPayload);
+            
+            console.log('-> Делаем паузу (2 сек) перед запросом к OpenAI...');
+            await new Promise(res => setTimeout(res, 2000));
+
             await sendOpenAIAlert(alertPayload);
         } else {
              console.log(`Рост для ${record.symbol} в пределах нормы.`);
@@ -118,19 +127,13 @@ const pool = new Pool({
     process.exit(1);
 }).finally(async () => {
     await pool.end();
-    console.log('Работа скрипта завершена. Соединение с базой данных закрыто.');
+    console.log('Работа скрипта завершена.');
 });
 
 // --- Вспомогательные функции ---
 function calculateGrowth(current, previous) { if (previous === null || previous === undefined || current <= previous) { return 0; } return ((current - previous) / previous) * 100; }
-
 async function sendTelegramAlert(payload) { if (!CONFIG.telegram.botToken || !CONFIG.telegram.chatId) { console.warn('Переменные для Telegram не настроены. Алерт пропущен.'); return; } const message = `📈 **Обнаружен рост холдеров!**\n-----------------------------------\n**Токен:** ${payload.symbol}\n**Контракт:** \`${payload.contract}\`\n**Время:** ${payload.timestamp}\n-----------------------------------\n**Рост с прошлой записи:** ${payload.growth_vs_previous}\n**Рост за 1 час:** ${payload.growth_1h}\n**Рост за 3 часа:** ${payload.growth_3h}\n**Рост за 12 часов:** ${payload.growth_12h}\n**Рост за 24 часа:** ${payload.growth_24h}`; const url = `https://api.telegram.org/bot${CONFIG.telegram.botToken}/sendMessage`; try { await axios.post(url, { chat_id: CONFIG.telegram.chatId, text: message, parse_mode: 'Markdown' }); console.log(`🚀 Алерт для ${payload.symbol} успешно отправлен в Telegram.`); } catch (error) { console.error('Ошибка отправки алерта в Telegram:', error.response ? error.response.data : error.message); } }
-
-async function sendOpenAIAlert(payload) {
-    if (!CONFIG.openai.apiKey) { console.warn('API ключ OpenAI не настроен. Запрос пропущен.'); return; }
-    
-    const systemPrompt = `Выступай в роли **старшего криптовалютного аналитика** с 10-летним опытом работы в ведущих венчурных фондах и аналитических компаниях (таких как Messari, Nansen, Glassnode). Твой стиль — объективный, сжатый, основанный на данных. Ты умеешь быстро отделять хайп от реальных фактов. Твоя задача — провести **мгновенный и всесторонний 360-градусный анализ** токена, используя предоставленные данные как отправную точку, и представить результат в виде структурированного отчета на русском языке.`;
-    const userPromptTemplate = `
+async function sendOpenAIAlert(payload) { if (!CONFIG.openai.apiKey) { console.warn('API ключ OpenAI не настроен. Запрос пропущен.'); return; } const systemPrompt = `Выступай в роли **старшего криптовалютного аналитика** с 10-летним опытом работы в ведущих венчурных фондах и аналитических компаниях (таких как Messari, Nansen, Glassnode). Твой стиль — объективный, сжатый, основанный на данных. Ты умеешь быстро отделять хайп от реальных фактов. Твоя задача — провести **мгновенный и всесторонний 360-градусный анализ** токена, используя предоставленные данные как отправную точку, и представить результат в виде структурированного отчета на русском языке.`; const userPromptTemplate = `
 # КОНТЕКСТ СИГНАЛА
 Я предоставляю тебе оперативные данные о росте числа холдеров определенного токена. Этот рост может быть сигналом о потенциальных событиях, повышенном интересе или маркетинговой активности.
 # ВХОДНЫЕ ДАННЫЕ ДЛЯ АНАЛИЗА
@@ -166,23 +169,13 @@ async function sendOpenAIAlert(payload) {
     
     console.log(`Отправка запроса в OpenAI для токена ${payload.symbol}...`);
     try {
-        const response = await axios.post('https://api.openai.com/v1/chat/completions', {
-            model: CONFIG.openai.model,
-            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: finalUserPrompt }]
-        }, { headers: { 'Authorization': `Bearer ${CONFIG.openai.apiKey}` }});
-
+        const response = await axios.post('https://api.openai.com/v1/chat/completions', { model: CONFIG.openai.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: finalUserPrompt }] }, { headers: { 'Authorization': `Bearer ${CONFIG.openai.apiKey}` }});
         const analysisText = response.data.choices[0].message.content;
         console.log(`🧠 Аналитический отчет от OpenAI для ${payload.symbol} успешно получен.`);
-
         if (analysisText) {
             const reportMessage = `🤖 **Аналитический отчет по ${payload.symbol}**:\n\n${analysisText}`;
             const url = `https://api.telegram.org/bot${CONFIG.telegram.botToken}/sendMessage`;
-            
-            await axios.post(url, { 
-                chat_id: CONFIG.telegram.chatId, 
-                text: reportMessage, 
-                parse_mode: 'Markdown' 
-            });
+            await axios.post(url, { chat_id: CONFIG.telegram.chatId, text: reportMessage, parse_mode: 'Markdown' });
             console.log(`✅ Отчет по ${payload.symbol} успешно отправлен в Telegram.`);
         }
     } catch (error) { console.error('Ошибка в процессе запроса к OpenAI или отправки отчета:', error.response ? error.response.data.error.message : error.message); }
