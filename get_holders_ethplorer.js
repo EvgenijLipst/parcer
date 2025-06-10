@@ -1,25 +1,15 @@
-// get_holders_ethplorer.js (ВЕРСИЯ С ПРОДВИНУТЫМ ПРОМПТОМ ДЛЯ GPT-4o)
+// ВРЕМЕННЫЙ ОТЛАДОЧНЫЙ СКРИПТ
 const axios = require('axios');
 const { Pool } = require('pg');
 
+// ... (Секция CONFIG остается без изменений) ...
 const CONFIG = {
-    growthThresholds: {
-        vsPrevious: 0.3,
-        last1Hour: 0.8,
-        last3Hours: 1.0,
-        last12Hours: 3.0,
-        last24Hours: 5.0,
-    },
-    telegram: {
-        botToken: process.env.TELEGRAM_BOT_TOKEN,
-        chatId: process.env.TELEGRAM_CHAT_ID,
-    },
-    openai: {
-        apiKey: process.env.OPENAI_API_KEY,
-        model: 'gpt-4o',
-    },
+    growthThresholds: { vsPrevious: 0.3, last1Hour: 0.8, last3Hours: 1.0, last12Hours: 3.0, last24Hours: 5.0, },
+    telegram: { botToken: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID, },
+    openai: { apiKey: process.env.OPENAI_API_KEY, model: 'gpt-4o', },
     cleanupIntervalHours: 24,
 };
+
 
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
@@ -27,26 +17,15 @@ const pool = new Pool({
 });
 
 (async () => {
-    console.log('Запуск скрипта...');
-
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS holders (
-            id SERIAL PRIMARY KEY,
-            contract TEXT NOT NULL,
-            symbol TEXT,
-            holders INTEGER,
-            error TEXT,
-            parsed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-        )
-    `);
-
+    console.log('--- ЗАПУСК В РЕЖИМЕ ГЛУБОКОЙ ОТЛАДКИ ---');
+    
+    // ... (Создание таблицы и получение контрактов без изменений) ...
+    await pool.query(`CREATE TABLE IF NOT EXISTS holders (id SERIAL PRIMARY KEY, contract TEXT NOT NULL, symbol TEXT, holders INTEGER, error TEXT, parsed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())`);
     const contracts = process.argv.slice(2);
-    if (!contracts.length) {
-        console.error("Ошибка: Не указаны адреса контрактов для парсинга.");
-        process.exit(1);
-    }
+    if (!contracts.length) { console.error("Ошибка: Не указаны адреса контрактов."); process.exit(1); }
     console.log(`Получено ${contracts.length} контрактов для обработки.`);
 
+    // ... (Парсинг и запись в базу без изменений) ...
     const newRecords = [];
     for (const contract of contracts) {
         await new Promise(res => setTimeout(res, 1000));
@@ -66,194 +45,53 @@ const pool = new Pool({
 
     for (const r of newRecords) {
         if (r.error) continue;
-        await pool.query(
-            `INSERT INTO holders(contract, symbol, holders, error) VALUES($1, $2, $3, $4)`,
-            [r.contract, r.symbol, r.holders, r.error]
-        );
+        await pool.query(`INSERT INTO holders(contract, symbol, holders, error) VALUES($1, $2, $3, $4)`,[r.contract, r.symbol, r.holders, r.error]);
     }
     console.log(`✅ ${newRecords.filter(r => !r.error).length} новых записей сохранено в базу.`);
 
+
     console.log('\n--- Начало анализа роста ---');
-    for (const record of newRecords) {
-        if (record.error || !record.holders) continue;
+    // Анализируем только ПЕРВЫЙ токен в списке для чистоты лога
+    const record = newRecords[0];
+    if (!record || record.error || !record.holders) {
+        console.log('Первый токен в списке содержит ошибку или нет данных. Выход.');
+        process.exit(0);
+    }
 
-        const historyQuery = `
-            SELECT
-                (SELECT h.holders FROM holders h WHERE h.contract = $1 ORDER BY h.parsed_at DESC LIMIT 1 OFFSET 1) AS prev_holders,
-                (SELECT h.holders FROM holders h WHERE h.contract = $1 AND h.parsed_at <= NOW() - INTERVAL '1 hour' ORDER BY h.parsed_at DESC LIMIT 1) AS h1_holders,
-                (SELECT h.holders FROM holders h WHERE h.contract = $1 AND h.parsed_at <= NOW() - INTERVAL '3 hours' ORDER BY h.parsed_at DESC LIMIT 1) AS h3_holders,
-                (SELECT h.holders FROM holders h WHERE h.contract = $1 AND h.parsed_at <= NOW() - INTERVAL '12 hours' ORDER BY h.parsed_at DESC LIMIT 1) AS h12_holders,
-                (SELECT h.holders FROM holders h WHERE h.contract = $1 AND h.parsed_at <= NOW() - INTERVAL '24 hours' ORDER BY h.parsed_at DESC LIMIT 1) AS h24_holders
-        `;
-        const { rows: [history] } = await pool.query(historyQuery, [record.contract]);
+    console.log(`\n1. Анализируем токен: ${record.symbol} с контрактом ${record.contract}`);
+    console.log(`2. Свежее значение холдеров (из API, в памяти): ${record.holders}`);
 
-        if (!history) continue;
+    const historyQuery = `
+        SELECT * FROM holders WHERE contract = $1 ORDER BY parsed_at DESC LIMIT 2
+    `;
+    const { rows: historyRows } = await pool.query(historyQuery, [record.contract]);
 
-        const currentHolders = record.holders;
-        const growth = {
-            vsPrevious: calculateGrowth(currentHolders, history.prev_holders),
-            last1Hour: calculateGrowth(currentHolders, history.h1_holders),
-            last3Hours: calculateGrowth(currentHolders, history.h3_holders),
-            last12Hours: calculateGrowth(currentHolders, history.h12_holders),
-            last24Hours: calculateGrowth(currentHolders, history.h24_holders),
-        };
+    console.log(`3. Запрос в базу (${historyQuery.trim()}) вернул ${historyRows.length} строк(у/и).`);
+    console.log('4. Вот эти строки целиком (самая новая - первая):');
+    console.table(historyRows);
 
-        const shouldAlert =
-            growth.vsPrevious >= CONFIG.growthThresholds.vsPrevious ||
-            growth.last1Hour >= CONFIG.growthThresholds.last1Hour ||
-            growth.last3Hours >= CONFIG.growthThresholds.last3Hours ||
-            growth.last12Hours >= CONFIG.growthThresholds.last12Hours ||
-            growth.last24Hours >= CONFIG.growthThresholds.last24Hours;
+    if (historyRows.length < 2) {
+        console.log('5. Найдено меньше двух записей. Сравнение невозможно. Рост = 0%.');
+    } else {
+        const currentDbValue = historyRows[0].holders;
+        const previousDbValue = historyRows[1].holders;
+        console.log(`5. Самое свежее значение в базе: ${currentDbValue} (за ${historyRows[0].parsed_at})`);
+        console.log(`6. ПРЕДЫДУЩЕЕ значение в базе: ${previousDbValue} (за ${historyRows[1].parsed_at})`);
 
-        if (shouldAlert) {
-            console.log(`[ALERT] Обнаружен значительный рост для токена ${record.symbol} (${record.contract})`);
-            const alertPayload = {
-                timestamp: new Date().toISOString(),
-                symbol: record.symbol,
-                contract: record.contract,
-                growth_vs_previous: `${growth.vsPrevious.toFixed(2)}%`,
-                growth_1h: `${growth.last1Hour.toFixed(2)}%`,
-                growth_3h: `${growth.last3Hours.toFixed(2)}%`,
-                growth_12h: `${growth.last12Hours.toFixed(2)}%`,
-                growth_24h: `${growth.last24Hours.toFixed(2)}%`,
-            };
-            await sendTelegramAlert(alertPayload);
-            await sendOpenAIAlert(alertPayload); // <--- ВЫЗОВ ОБНОВЛЕННОЙ ФУНКЦИИ
+        const growth = ((record.holders - previousDbValue) / previousDbValue) * 100;
+        console.log(`7. РАСЧЕТ: ((${record.holders} - ${previousDbValue}) / ${previousDbValue}) * 100 = ${growth.toFixed(2)}%`);
+        
+        if (growth >= CONFIG.growthThresholds.vsPrevious) {
+            console.log('РЕЗУЛЬТАТ: Рост ПРЕВЫШАЕТ порог 0.3%. Должен быть алерт.');
         } else {
-             console.log(`Рост для ${record.symbol} в пределах нормы.`);
+            console.log('РЕЗУЛЬТАТ: Рост В ПРЕДЕЛАХ НОРМЫ.');
         }
     }
-    console.log('--- Анализ роста завершен ---\n');
-
-    const deleteResult = await pool.query(
-        `DELETE FROM holders WHERE parsed_at < NOW() - INTERVAL '${CONFIG.cleanupIntervalHours} hours'`
-    );
-    console.log(`🧹 Удалено ${deleteResult.rowCount} старых записей.`);
 
 })().catch(e => {
     console.error('Критическая ошибка в работе скрипта:', e);
     process.exit(1);
 }).finally(async () => {
     await pool.end();
-    console.log('Работа скрипта завершена. Соединение с базой данных закрыто.');
+    console.log('--- ОТЛАДОЧНЫЙ ЗАПУСК ЗАВЕРШЕН ---');
 });
-
-function calculateGrowth(current, previous) {
-    if (previous === null || previous === undefined || current <= previous) {
-        return 0;
-    }
-    return ((current - previous) / previous) * 100;
-}
-
-async function sendTelegramAlert(payload) {
-    if (!CONFIG.telegram.botToken || !CONFIG.telegram.chatId) {
-        console.warn('Переменные для Telegram не настроены. Алерт пропущен.');
-        return;
-    }
-    const message = `
-📈 **Обнаружен рост холдеров!**
------------------------------------
-**Токен:** ${payload.symbol}
-**Контракт:** \`${payload.contract}\`
-**Время:** ${payload.timestamp}
------------------------------------
-**Рост с прошлой записи:** ${payload.growth_vs_previous}
-**Рост за 1 час:** ${payload.growth_1h}
-**Рост за 3 часа:** ${payload.growth_3h}
-**Рост за 12 часов:** ${payload.growth_12h}
-**Рост за 24 часа:** ${payload.growth_24h}
-    `;
-    const url = `https://api.telegram.org/bot${CONFIG.telegram.botToken}/sendMessage`;
-    try {
-        await axios.post(url, {
-            chat_id: CONFIG.telegram.chatId,
-            text: message,
-            parse_mode: 'Markdown'
-        });
-        console.log(`🚀 Алерт для ${payload.symbol} успешно отправлен в Telegram.`);
-    } catch (error) {
-        console.error('Ошибка отправки алерта в Telegram:', error.response ? error.response.data : error.message);
-    }
-}
-
-// --- ОБНОВЛЕННАЯ ФУНКЦИЯ ---
-async function sendOpenAIAlert(payload) {
-    if (!CONFIG.openai.apiKey) {
-        console.warn('API ключ OpenAI не настроен. Запрос пропущен.');
-        return;
-    }
-
-    // Системный промпт задает роль и общий контекст для AI
-    const systemPrompt = `Выступай в роли **старшего криптовалютного аналитика** с 10-летним опытом работы в ведущих венчурных фондах и аналитических компаниях (таких как Messari, Nansen, Glassnode). Твой стиль — объективный, сжатый, основанный на данных. Ты умеешь быстро отделять хайп от реальных фактов. Твоя задача — провести **мгновенный и всесторонний 360-градусный анализ** токена, используя предоставленные данные как отправную точку, и представить результат в виде структурированного отчета на русском языке.`;
-
-    // Шаблон пользовательского промпта с плейсхолдерами
-    const userPromptTemplate = `
-# КОНТЕКСТ СИГНАЛА
-Я предоставляю тебе оперативные данные о росте числа холдеров определенного токена. Этот рост может быть сигналом о потенциальных событиях, повышенном интересе или маркетинговой активности.
-
-# ВХОДНЫЕ ДАННЫЕ ДЛЯ АНАЛИЗА
-
-* **Название токена:** {TOKEN_NAME}
-* **Адрес контракта (Ethereum):** {TOKEN_CONTRACT}
-* **Динамика роста холдеров (сигнал):**
-    * Рост за последние 30 минут (vs предыдущая запись): {GROWTH_VS_PREVIOUS}
-    * Рост за 1 час: {GROWTH_1H}
-    * Рост за 3 часа: {GROWTH_3H}
-    * Рост за 12 часов: {GROWTH_12H}
-    * Рост за 24 часа: {GROWTH_24H}
-
-# ЗАДАЧИ ДЛЯ АНАЛИЗА (проработай каждый пункт)
-
-1.  **События и Медиа-фон:** Проанализируй последние новости, анонсы в официальных каналах (X/Twitter, Discord, Blog) и упоминания в ключевых крипто-СМИ за последнюю неделю. Есть ли конкретный инфоповод или событие, которое могло спровоцировать рост?
-2.  **Маркетинговая активность:** Оцени, не является ли рост результатом недавней маркетинговой кампании, Airdrop, конкурса или активной работы с инфлюенсерами.
-3.  **Приток пользователей (On-chain):** Подтверждается ли рост холдеров реальной активностью в сети? Кратко проанализируй динамику объемов торгов на DEX (Uniswap, Sushiswap), количество транзакций и число активных адресов за последние дни.
-4.  **Крупные игроки (Big Money):** Проверь последние крупные сделки по этому токену на Etherscan или в аналитических сервисах. Есть ли признаки входа/выхода фондов, "китов" или крупных инвесторов?
-5.  **Настроения "Smart Money":** Как к этому токену относятся известные "умные кошельки" (smart money wallets)? Есть ли признаки накопления или продажи с их стороны? (Используй данные Nansen, Arkham, если возможно).
-6.  **Общий сентимент (Sentiment):** Какой сейчас преобладает сентимент по токену в социальных сетях? Используй ключевые слова "bullish", "bearish", "scam", "gem".
-7.  **Фундаментальный и Технический Анализ (FA/TA):**
-    * **FA:** Дай краткую сводку (1-2 предложения) по сути проекта, его полезности (utility) и токеномике.
-    * **TA:** Укажи ключевые уровни поддержки и сопротивления, а также текущее состояние основных индикаторов (например, RSI, MACD на дневном графике). Тренд восходящий, нисходящий или боковик?
-8.  **Ключевые метрики:** Проверь текущую рыночную капитализацию (Market Cap), FDV (Fully Diluted Valuation) и циркулирующее предложение. Как эти показатели изменились за последнее время?
-9.  **Оценка точки входа:** Проанализируй текущую ситуацию с точки зрения потенциального входа в позицию. Четко перечисли основные **бычьи факторы (ЗА)** и **медвежьи факторы (ПРОТИВ)**. Не давай прямого совета, а предоставь сбалансированную оценку.
-10. **Анализ рисков:** Выяви и четко обозначь основные риски, связанные с токеном на данный момент (например, риски централизации, уязвимости смарт-контракта, регуляторные риски, низкая ликвидность).
-
-# ФОРМАТ ВЫВОДА
-
-Представь результат в виде структурированного отчета в формате Markdown с четкими заголовками для каждого из 10 пунктов анализа. В конце сделай краткое резюме.
-
-# ОГРАНИЧЕНИЯ И СТИЛЬ
-
-* Будь объективен. Если данных по какому-то пункту нет, так и напиши: "Данные отсутствуют" или "Не удалось определить".
-* Используй профессиональную, но понятную лексику.
-* **Обязательно добавь в конце отчета следующий дисклеймер:** *"Данный анализ носит информационный характер, основан на общедоступных данных и не является финансовой рекомендацией или призывом к действию. Всегда проводите собственное исследование (DYOR)."*
-    `;
-
-    // Заменяем плейсхолдеры на реальные данные из payload
-    const finalUserPrompt = userPromptTemplate
-        .replace('{TOKEN_NAME}', payload.symbol)
-        .replace('{TOKEN_CONTRACT}', payload.contract)
-        .replace('{GROWTH_VS_PREVIOUS}', payload.growth_vs_previous)
-        .replace('{GROWTH_1H}', payload.growth_1h)
-        .replace('{GROWTH_3H}', payload.growth_3h)
-        .replace('{GROWTH_12H}', payload.growth_12h)
-        .replace('{GROWTH_24H}', payload.growth_24h);
-
-    console.log(`Отправка запроса в OpenAI для токена ${payload.symbol}...`);
-
-    try {
-        await axios.post('https://api.openai.com/v1/chat/completions', {
-            model: CONFIG.openai.model,
-            messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: finalUserPrompt }
-            ]
-        }, {
-            headers: { 'Authorization': `Bearer ${CONFIG.openai.apiKey}` }
-        });
-        // Здесь можно добавить обработку ответа от ChatGPT, если нужно
-        // например, сохранить отчет в базу или переслать в Telegram
-        console.log(`🧠 Ответ от OpenAI для ${payload.symbol} получен (в этой версии не обрабатывается).`);
-    } catch (error) {
-        console.error('Ошибка запроса к OpenAI:', error.response ? error.response.data.error.message : error.message);
-    }
-}
