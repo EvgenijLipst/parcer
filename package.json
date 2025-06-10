@@ -7,6 +7,6 @@
     "pg": "^8.16.0"
   },
   "scripts": {
-    "start": "node get_holders_ethplorer.js 0xaea46A60368A7bD060eec7DF8CBa43b7EF41Ad85"
+    "start": "node get_holders_ethplorer.js --test 0xaea46A60368A7bD060eec7DF8CBa43b7EF41Ad85 100"
   }
 }
