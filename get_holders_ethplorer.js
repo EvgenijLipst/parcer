@@ -7,7 +7,7 @@ const CONFIG = {
     telegram: { botToken: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID },
     openai: { apiKey: process.env.OPENAI_API_KEY, model: 'gpt-4o' },
     cleanupIntervalHours: 24,
-    apiPauseMs: 1500, // <--- ИЗМЕНЕНИЕ: Пауза между запросами к API в миллисекундах
+    apiPauseMs: 2000, // Пауза между запросами к API в миллисекундах
 };
 
 const pool = new Pool({
@@ -49,13 +49,13 @@ const pool = new Pool({
     const newRecords = [];
     for (const contract of contracts) {
         if (!contract) continue;
-        // <--- ИЗМЕНЕНИЕ: Используем значение паузы из CONFIG
         await new Promise(res => setTimeout(res, CONFIG.apiPauseMs)); 
         try {
             const { data } = await axios.get(`https://api.ethplorer.io/getTokenInfo/${contract}?apiKey=freekey`);
             if (data.address && data.symbol && data.holdersCount) {
                 newRecords.push({ contract: data.address, symbol: data.symbol, holders: data.holdersCount, error: "" });
             } else {
+                console.log(`[DEBUG] Получен невалидный ответ для контракта ${contract}:`, data);
                 newRecords.push({ contract, symbol: 'N/A', holders: 0, error: "Invalid data from API" });
             }
         } catch (e) {
@@ -74,7 +74,6 @@ const pool = new Pool({
     console.log('\n--- Начало анализа роста ---');
     for (const record of newRecords) {
         if (record.error || !record.holders || !record.contract) continue;
-
         const historyQuery = `
             SELECT
                 (SELECT h.holders FROM holders h WHERE h.contract ILIKE $1 ORDER BY h.parsed_at DESC LIMIT 1 OFFSET 1) AS prev_holders,
@@ -84,14 +83,11 @@ const pool = new Pool({
                 (SELECT h.holders FROM holders h WHERE h.contract ILIKE $1 AND h.parsed_at <= NOW() - INTERVAL '24 hours' ORDER BY h.parsed_at DESC LIMIT 1) AS h24_holders
         `;
         const { rows: [history] } = await pool.query(historyQuery, [record.contract]);
-
         if (!history) continue;
-        
         if (isTestMode && record.contract.toLowerCase() === testContract.toLowerCase()) {
             history.prev_holders = testPreviousValue;
             console.log(`[РЕЖИМ ТЕСТА] Для ${record.symbol} используется поддельное предыдущее значение: ${testPreviousValue}`);
         }
-
         const currentHolders = record.holders;
         const growth = {
             vsPrevious: calculateGrowth(currentHolders, history.prev_holders),
@@ -100,28 +96,21 @@ const pool = new Pool({
             last12Hours: calculateGrowth(currentHolders, history.h12_holders),
             last24Hours: calculateGrowth(currentHolders, history.h24_holders),
         };
-
         const shouldAlert = growth.vsPrevious >= CONFIG.growthThresholds.vsPrevious || growth.last1Hour >= CONFIG.growthThresholds.last1Hour || growth.last3Hours >= CONFIG.growthThresholds.last3Hours || growth.last12Hours >= CONFIG.growthThresholds.last12Hours || growth.last24Hours >= CONFIG.growthThresholds.last24Hours;
-
         if (shouldAlert) {
             console.log(`[ALERT] Обнаружен значительный рост для токена ${record.symbol} (${record.contract})`);
             const alertPayload = { timestamp: new Date().toISOString(), symbol: record.symbol, contract: record.contract, growth_vs_previous: `${growth.vsPrevious.toFixed(2)}%`, growth_1h: `${growth.last1Hour.toFixed(2)}%`, growth_3h: `${growth.last3Hours.toFixed(2)}%`, growth_12h: `${growth.last12Hours.toFixed(2)}%`, growth_24h: `${growth.last24Hours.toFixed(2)}%`};
-            
             await sendTelegramAlert(alertPayload);
-            
             console.log('-> Делаем паузу (2 сек) перед запросом к OpenAI...');
             await new Promise(res => setTimeout(res, 2000));
-
             await sendOpenAIAlert(alertPayload);
         } else {
              console.log(`Рост для ${record.symbol} в пределах нормы.`);
         }
     }
     console.log('--- Анализ роста завершен ---\n');
-
     const deleteResult = await pool.query(`DELETE FROM holders WHERE parsed_at < NOW() - INTERVAL '${CONFIG.cleanupIntervalHours} hours'`);
     console.log(`🧹 Удалено ${deleteResult.rowCount} старых записей.`);
-
 })().catch(e => {
     console.error('Критическая ошибка в работе скрипта:', e);
     process.exit(1);
@@ -129,8 +118,6 @@ const pool = new Pool({
     await pool.end();
     console.log('Работа скрипта завершена.');
 });
-
-// --- Вспомогательные функции ---
 function calculateGrowth(current, previous) { if (previous === null || previous === undefined || current <= previous) { return 0; } return ((current - previous) / previous) * 100; }
 async function sendTelegramAlert(payload) { if (!CONFIG.telegram.botToken || !CONFIG.telegram.chatId) { console.warn('Переменные для Telegram не настроены. Алерт пропущен.'); return; } const message = `📈 **Обнаружен рост холдеров!**\n-----------------------------------\n**Токен:** ${payload.symbol}\n**Контракт:** \`${payload.contract}\`\n**Время:** ${payload.timestamp}\n-----------------------------------\n**Рост с прошлой записи:** ${payload.growth_vs_previous}\n**Рост за 1 час:** ${payload.growth_1h}\n**Рост за 3 часа:** ${payload.growth_3h}\n**Рост за 12 часов:** ${payload.growth_12h}\n**Рост за 24 часа:** ${payload.growth_24h}`; const url = `https://api.telegram.org/bot${CONFIG.telegram.botToken}/sendMessage`; try { await axios.post(url, { chat_id: CONFIG.telegram.chatId, text: message, parse_mode: 'Markdown' }); console.log(`🚀 Алерт для ${payload.symbol} успешно отправлен в Telegram.`); } catch (error) { console.error('Ошибка отправки алерта в Telegram:', error.response ? error.response.data : error.message); } }
 async function sendOpenAIAlert(payload) { if (!CONFIG.openai.apiKey) { console.warn('API ключ OpenAI не настроен. Запрос пропущен.'); return; } const systemPrompt = `Выступай в роли **старшего криптовалютного аналитика** с 10-летним опытом работы в ведущих венчурных фондах и аналитических компаниях (таких как Messari, Nansen, Glassnode). Твой стиль — объективный, сжатый, основанный на данных. Ты умеешь быстро отделять хайп от реальных фактов. Твоя задача — провести **мгновенный и всесторонний 360-градусный анализ** токена, используя предоставленные данные как отправную точку, и представить результат в виде структурированного отчета на русском языке.`; const userPromptTemplate = `
@@ -166,7 +153,6 @@ async function sendOpenAIAlert(payload) { if (!CONFIG.openai.apiKey) { console.w
 * **Обязательно добавь в конце отчета следующий дисклеймер:** *"Данный анализ носит информационный характер, основан на общедоступных данных и не является финансовой рекомендацией или призывом к действию. Всегда проводите собственное исследование (DYOR)."*
     `;
     const finalUserPrompt = userPromptTemplate.replace('{TOKEN_NAME}', payload.symbol).replace('{TOKEN_CONTRACT}', payload.contract).replace('{GROWTH_VS_PREVIOUS}', payload.growth_vs_previous).replace('{GROWTH_1H}', payload.growth_1h).replace('{GROWTH_3H}', payload.growth_3h).replace('{GROWTH_12H}', payload.growth_12h).replace('{GROWTH_24H}', payload.growth_24h);
-    
     console.log(`Отправка запроса в OpenAI для токена ${payload.symbol}...`);
     try {
         const response = await axios.post('https://api.openai.com/v1/chat/completions', { model: CONFIG.openai.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: finalUserPrompt }] }, { headers: { 'Authorization': `Bearer ${CONFIG.openai.apiKey}` }});
