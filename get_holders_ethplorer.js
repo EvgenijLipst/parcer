@@ -7,7 +7,7 @@ const CONFIG = {
     telegram: { botToken: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID },
     openai: { apiKey: process.env.OPENAI_API_KEY, model: 'gpt-4o' },
     cleanupIntervalHours: 24,
-    apiPauseMs: 2000, // Пауза между запросами к API в миллисекундах
+    apiPauseMs: 2500, // Пауза между запросами к API в миллисекундах
 };
 
 const pool = new Pool({
