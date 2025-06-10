@@ -1,4 +1,4 @@
-// get_holders_ethplorer.js (ФИНАЛЬНАЯ ВЕРСИЯ: ПРОМПТ + ТЕСТОВЫЙ РЕЖИМ)
+// get_holders_ethplorer.js (ФИНАЛЬНАЯ РАБОЧАЯ ВЕРСИЯ 2.0)
 const axios = require('axios');
 const { Pool } = require('pg');
 
@@ -29,7 +29,6 @@ const pool = new Pool({
 (async () => {
     console.log('Запуск скрипта...');
 
-    // --- ОБЪЕДИНЕННАЯ ЛОГИКА ЗАПУСКА ---
     let contracts;
     let testPreviousValue = null;
     let testContract = null;
@@ -47,12 +46,11 @@ const pool = new Pool({
             process.exit(1);
         }
     } else {
-        // Обычный рабочий режим
+        // Обычный рабочий режим со списком контрактов
         contracts = process.argv.slice(2);
     }
-    // --- КОНЕЦ ЛОГИКИ ЗАПУСКА ---
 
-    if (!contracts.length) {
+    if (!contracts || !contracts.length) {
         console.error("Ошибка: Не указаны адреса контрактов для парсинга.");
         process.exit(1);
     }
@@ -65,8 +63,9 @@ const pool = new Pool({
         await new Promise(res => setTimeout(res, 1000));
         try {
             const { data } = await axios.get(`https://api.ethplorer.io/getTokenInfo/${contract}?apiKey=freekey`);
-            if (data.symbol && data.holdersCount) {
-                newRecords.push({ contract, symbol: data.symbol, holders: data.holdersCount, error: "" });
+            if (data.address && data.symbol && data.holdersCount) {
+                // Используем адрес из ответа API для консистентности регистра
+                newRecords.push({ contract: data.address, symbol: data.symbol, holders: data.holdersCount, error: "" });
             } else {
                 newRecords.push({ contract, symbol: 'N/A', holders: 0, error: "Invalid data from API" });
             }
@@ -99,8 +98,8 @@ const pool = new Pool({
 
         if (!history) continue;
 
-        // Применяем тестовое значение, если мы в тестовом режиме
-        if (testPreviousValue !== null && record.contract === testContract) {
+        // Применяем тестовое значение, если мы в тестовом режиме (сравнение без учета регистра)
+        if (testPreviousValue !== null && record.contract.toLowerCase() === testContract.toLowerCase()) {
             history.prev_holders = testPreviousValue;
             console.log(`[РЕЖИМ ТЕСТА] Для ${record.symbol} используется поддельное предыдущее значение: ${testPreviousValue}`);
         }
@@ -118,16 +117,7 @@ const pool = new Pool({
 
         if (shouldAlert) {
             console.log(`[ALERT] Обнаружен значительный рост для токена ${record.symbol} (${record.contract})`);
-            const alertPayload = {
-                timestamp: new Date().toISOString(),
-                symbol: record.symbol,
-                contract: record.contract,
-                growth_vs_previous: `${growth.vsPrevious.toFixed(2)}%`,
-                growth_1h: `${growth.last1Hour.toFixed(2)}%`,
-                growth_3h: `${growth.last3Hours.toFixed(2)}%`,
-                growth_12h: `${growth.last12Hours.toFixed(2)}%`,
-                growth_24h: `${growth.last24Hours.toFixed(2)}%`,
-            };
+            const alertPayload = { timestamp: new Date().toISOString(), symbol: record.symbol, contract: record.contract, growth_vs_previous: `${growth.vsPrevious.toFixed(2)}%`, growth_1h: `${growth.last1Hour.toFixed(2)}%`, growth_3h: `${growth.last3Hours.toFixed(2)}%`, growth_12h: `${growth.last12Hours.toFixed(2)}%`, growth_24h: `${growth.last24Hours.toFixed(2)}%`};
             await sendTelegramAlert(alertPayload);
             await sendOpenAIAlert(alertPayload);
         } else {
@@ -147,40 +137,12 @@ const pool = new Pool({
     console.log('Работа скрипта завершена. Соединение с базой данных закрыто.');
 });
 
-function calculateGrowth(current, previous) {
-    if (previous === null || previous === undefined || current <= previous) { return 0; }
-    return ((current - previous) / previous) * 100;
-}
-
-async function sendTelegramAlert(payload) {
-    if (!CONFIG.telegram.botToken || !CONFIG.telegram.chatId) { console.warn('Переменные для Telegram не настроены. Алерт пропущен.'); return; }
-    const message = `
-📈 **Обнаружен рост холдеров!**
------------------------------------
-**Токен:** ${payload.symbol}
-**Контракт:** \`${payload.contract}\`
-**Время:** ${payload.timestamp}
------------------------------------
-**Рост с прошлой записи:** ${payload.growth_vs_previous}
-**Рост за 1 час:** ${payload.growth_1h}
-**Рост за 3 часа:** ${payload.growth_3h}
-**Рост за 12 часов:** ${payload.growth_12h}
-**Рост за 24 часа:** ${payload.growth_24h}
-    `;
-    const url = `https://api.telegram.org/bot${CONFIG.telegram.botToken}/sendMessage`;
-    try {
-        await axios.post(url, { chat_id: CONFIG.telegram.chatId, text: message, parse_mode: 'Markdown' });
-        console.log(`🚀 Алерт для ${payload.symbol} успешно отправлен в Telegram.`);
-    } catch (error) { console.error('Ошибка отправки алерта в Telegram:', error.response ? error.response.data : error.message); }
-}
-
-async function sendOpenAIAlert(payload) {
-    if (!CONFIG.openai.apiKey) { console.warn('API ключ OpenAI не настроен. Запрос пропущен.'); return; }
-    const systemPrompt = `Выступай в роли **старшего криптовалютного аналитика** с 10-летним опытом работы в ведущих венчурных фондах и аналитических компаниях (таких как Messari, Nansen, Glassnode). Твой стиль — объективный, сжатый, основанный на данных. Ты умеешь быстро отделять хайп от реальных фактов. Твоя задача — провести **мгновенный и всесторонний 360-градусный анализ** токена, используя предоставленные данные как отправную точку, и представить результат в виде структурированного отчета на русском языке.`;
-    const userPromptTemplate = `
+// --- Вспомогательные функции (без изменений) ---
+function calculateGrowth(current, previous) { if (previous === null || previous === undefined || current <= previous) { return 0; } return ((current - previous) / previous) * 100; }
+async function sendTelegramAlert(payload) { if (!CONFIG.telegram.botToken || !CONFIG.telegram.chatId) { console.warn('Переменные для Telegram не настроены. Алерт пропущен.'); return; } const message = `📈 **Обнаружен рост холдеров!**\n-----------------------------------\n**Токен:** ${payload.symbol}\n**Контракт:** \`${payload.contract}\`\n**Время:** ${payload.timestamp}\n-----------------------------------\n**Рост с прошлой записи:** ${payload.growth_vs_previous}\n**Рост за 1 час:** ${payload.growth_1h}\n**Рост за 3 часа:** ${payload.growth_3h}\n**Рост за 12 часов:** ${payload.growth_12h}\n**Рост за 24 часа:** ${payload.growth_24h}`; const url = `https://api.telegram.org/bot${CONFIG.telegram.botToken}/sendMessage`; try { await axios.post(url, { chat_id: CONFIG.telegram.chatId, text: message, parse_mode: 'Markdown' }); console.log(`🚀 Алерт для ${payload.symbol} успешно отправлен в Telegram.`); } catch (error) { console.error('Ошибка отправки алерта в Telegram:', error.response ? error.response.data : error.message); } }
+async function sendOpenAIAlert(payload) { if (!CONFIG.openai.apiKey) { console.warn('API ключ OpenAI не настроен. Запрос пропущен.'); return; } const systemPrompt = `Выступай в роли **старшего криптовалютного аналитика** с 10-летним опытом работы в ведущих венчурных фондах и аналитических компаниях (таких как Messari, Nansen, Glassnode). Твой стиль — объективный, сжатый, основанный на данных. Ты умеешь быстро отделять хайп от реальных фактов. Твоя задача — провести **мгновенный и всесторонний 360-градусный анализ** токена, используя предоставленные данные как отправную точку, и представить результат в виде структурированного отчета на русском языке.`; const userPromptTemplate = `
 # КОНТЕКСТ СИГНАЛА
 Я предоставляю тебе оперативные данные о росте числа холдеров определенного токена. Этот рост может быть сигналом о потенциальных событиях, повышенном интересе или маркетинговой активности.
-
 # ВХОДНЫЕ ДАННЫЕ ДЛЯ АНАЛИЗА
 * **Название токена:** {TOKEN_NAME}
 * **Адрес контракта (Ethereum):** {TOKEN_CONTRACT}
@@ -190,7 +152,6 @@ async function sendOpenAIAlert(payload) {
     * Рост за 3 часа: {GROWTH_3H}
     * Рост за 12 часов: {GROWTH_12H}
     * Рост за 24 часа: {GROWTH_24H}
-
 # ЗАДАЧИ ДЛЯ АНАЛИЗА (проработай каждый пункт)
 1.  **События и Медиа-фон:** Проанализируй последние новости, анонсы в официальных каналах (X/Twitter, Discord, Blog) и упоминания в ключевых крипто-СМИ за последнюю неделю. Есть ли конкретный инфоповод или событие, которое могло спровоцировать рост?
 2.  **Маркетинговая активность:** Оцени, не является ли рост результатом недавней маркетинговой кампании, Airdrop, конкурса или активной работы с инфлюенсерами.
@@ -204,34 +165,17 @@ async function sendOpenAIAlert(payload) {
 8.  **Ключевые метрики:** Проверь текущую рыночную капитализацию (Market Cap), FDV (Fully Diluted Valuation) и циркулирующее предложение. Как эти показатели изменились за последнее время?
 9.  **Оценка точки входа:** Проанализируй текущую ситуацию с точки зрения потенциального входа в позицию. Четко перечисли основные **бычьи факторы (ЗА)** и **медвежьи факторы (ПРОТИВ)**. Не давай прямого совета, а предоставь сбалансированную оценку.
 10. **Анализ рисков:** Выяви и четко обозначь основные риски, связанные с токеном на данный момент (например, риски централизации, уязвимости смарт-контракта, регуляторные риски, низкая ликвидность).
-
 # ФОРМАТ ВЫВОДА
 Представь результат в виде структурированного отчета в формате Markdown с четкими заголовками для каждого из 10 пунктов анализа. В конце сделай краткое резюме.
-
 # ОГРАНИЧЕНИЯ И СТИЛЬ
 * Будь объективен. Если данных по какому-то пункту нет, так и напиши: "Данные отсутствуют" или "Не удалось определить".
 * Используй профессиональную, но понятную лексику.
 * **Обязательно добавь в конце отчета следующий дисклеймер:** *"Данный анализ носит информационный характер, основан на общедоступных данных и не является финансовой рекомендацией или призывом к действию. Всегда проводите собственное исследование (DYOR)."*
     `;
-
-    const finalUserPrompt = userPromptTemplate
-        .replace('{TOKEN_NAME}', payload.symbol)
-        .replace('{TOKEN_CONTRACT}', payload.contract)
-        .replace('{GROWTH_VS_PREVIOUS}', payload.growth_vs_previous)
-        .replace('{GROWTH_1H}', payload.growth_1h)
-        .replace('{GROWTH_3H}', payload.growth_3h)
-        .replace('{GROWTH_12H}', payload.growth_12h)
-        .replace('{GROWTH_24H}', payload.growth_24h);
-
+    const finalUserPrompt = userPromptTemplate.replace('{TOKEN_NAME}', payload.symbol).replace('{TOKEN_CONTRACT}', payload.contract).replace('{GROWTH_VS_PREVIOUS}', payload.growth_vs_previous).replace('{GROWTH_1H}', payload.growth_1h).replace('{GROWTH_3H}', payload.growth_3h).replace('{GROWTH_12H}', payload.growth_12h).replace('{GROWTH_24H}', payload.growth_24h);
     console.log(`Отправка запроса в OpenAI для токена ${payload.symbol}...`);
     try {
-        await axios.post('https://api.openai.com/v1/chat/completions', {
-            model: CONFIG.openai.model,
-            messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: finalUserPrompt }
-            ]
-        }, { headers: { 'Authorization': `Bearer ${CONFIG.openai.apiKey}` }});
+        await axios.post('https://api.openai.com/v1/chat/completions', { model: CONFIG.openai.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: finalUserPrompt }] }, { headers: { 'Authorization': `Bearer ${CONFIG.openai.apiKey}` }});
         console.log(`🧠 Ответ от OpenAI для ${payload.symbol} получен (в этой версии не обрабатывается).`);
     } catch (error) { console.error('Ошибка запроса к OpenAI:', error.response ? error.response.data.error.message : error.message); }
 }
