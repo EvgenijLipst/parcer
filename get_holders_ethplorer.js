@@ -107,6 +107,10 @@ const pool = new Pool({
                 (SELECT h.holders FROM holders h WHERE h.contract = $1 AND h.parsed_at <= NOW() - INTERVAL '24 hours' ORDER BY h.parsed_at DESC LIMIT 1) AS h24_holders
         `;
         const { rows: [history] } = await pool.query(historyQuery, [record.contract]);
+        
+        // --- ОТЛАДОЧНАЯ СТРОКА ДЛЯ ПРОВЕРКИ ---
+        console.log(`[DEBUG] Данные для анализа ${record.symbol}:`, history);
+        // -----------------------------------------
 
         if (!history || !history.current_holders) continue;
 
