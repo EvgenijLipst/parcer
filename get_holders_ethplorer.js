@@ -1,4 +1,4 @@
-// get_holders_ethplorer.js (ФИНАЛЬНАЯ ПРОИЗВОДСТВЕННАЯ ВЕРСИЯ)
+// get_holders_ethplorer.js (ФИНАЛЬНАЯ ВЕРСИЯ 4.6: ИСПРАВЛЕН СРОК ХРАНЕНИЯ ДАННЫХ)
 const axios = require('axios');
 const { Pool } = require('pg');
 
@@ -6,8 +6,9 @@ const CONFIG = {
     growthThresholds: { vsPrevious: 0.3, last1Hour: 0.8, last3Hours: 1.0, last12Hours: 3.0, last24Hours: 5.0 },
     telegram: { botToken: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID },
     openai: { apiKey: process.env.OPENAI_API_KEY, model: 'gpt-4o' },
-    cleanupIntervalHours: 24,
-    apiPauseMs: 1000, // ИЗМЕНЕНИЕ: Пауза между запросами к API возвращена на 1000 мс
+    // ИЗМЕНЕНИЕ: Храним данные 48 часов, чтобы анализ за 24 часа всегда имел данные
+    cleanupIntervalHours: 48, 
+    apiPauseMs: 2000,
 };
 
 const pool = new Pool({
@@ -46,7 +47,6 @@ const pool = new Pool({
 
     await pool.query(`CREATE TABLE IF NOT EXISTS holders (id SERIAL PRIMARY KEY, contract TEXT NOT NULL, symbol TEXT, holders INTEGER, error TEXT, parsed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())`);
 
-    // ИЗМЕНЕНИЕ: Используем ваш персональный ключ из переменных окружения, если он есть
     const apiKey = process.env.ETHPLORER_API_KEY || 'freekey';
     console.log(`Используем API ключ: ${apiKey === 'freekey' ? 'публичный freekey' : 'персональный'}`);
 
@@ -69,12 +69,12 @@ const pool = new Pool({
     console.log('Данные о холдерах успешно спарсены:');
     console.table(newRecords);
 
-    // ... (остальной код скрипта без изменений) ...
     for (const r of newRecords) {
         if (r.error || !r.contract) continue;
         await pool.query(`INSERT INTO holders(contract, symbol, holders, error) VALUES($1, $2, $3, $4)`, [r.contract, r.symbol, r.holders, r.error]);
     }
     console.log(`✅ ${newRecords.filter(r => !r.error).length} новых записей сохранено в базу.`);
+
     console.log('\n--- Начало анализа роста ---');
     for (const record of newRecords) {
         if (record.error || !record.holders || !record.contract) continue;
@@ -122,6 +122,8 @@ const pool = new Pool({
     await pool.end();
     console.log('Работа скрипта завершена.');
 });
+
+// --- Вспомогательные функции (без изменений) ---
 function calculateGrowth(current, previous) { if (previous === null || previous === undefined || current <= previous) { return 0; } return ((current - previous) / previous) * 100; }
 async function sendTelegramAlert(payload) { if (!CONFIG.telegram.botToken || !CONFIG.telegram.chatId) { console.warn('Переменные для Telegram не настроены. Алерт пропущен.'); return; } const message = `📈 **Обнаружен рост холдеров!**\n-----------------------------------\n**Токен:** ${payload.symbol}\n**Контракт:** \`${payload.contract}\`\n**Время:** ${payload.timestamp}\n-----------------------------------\n**Рост с прошлой записи:** ${payload.growth_vs_previous}\n**Рост за 1 час:** ${payload.growth_1h}\n**Рост за 3 часа:** ${payload.growth_3h}\n**Рост за 12 часов:** ${payload.growth_12h}\n**Рост за 24 часа:** ${payload.growth_24h}`; const url = `https://api.telegram.org/bot${CONFIG.telegram.botToken}/sendMessage`; try { await axios.post(url, { chat_id: CONFIG.telegram.chatId, text: message, parse_mode: 'Markdown' }); console.log(`🚀 Алерт для ${payload.symbol} успешно отправлен в Telegram.`); } catch (error) { console.error('Ошибка отправки алерта в Telegram:', error.response ? error.response.data : error.message); } }
 async function sendOpenAIAlert(payload) { if (!CONFIG.openai.apiKey) { console.warn('API ключ OpenAI не настроен. Запрос пропущен.'); return; } const systemPrompt = `Выступай в роли **старшего криптовалютного аналитика** с 10-летним опытом работы в ведущих венчурных фондах и аналитических компаниях (таких как Messari, Nansen, Glassnode). Твой стиль — объективный, сжатый, основанный на данных. Ты умеешь быстро отделять хайп от реальных фактов. Твоя задача — провести **мгновенный и всесторонний 360-градусный анализ** токена, используя предоставленные данные как отправную точку, и представить результат в виде структурированного отчета на русском языке.`; const userPromptTemplate = `
