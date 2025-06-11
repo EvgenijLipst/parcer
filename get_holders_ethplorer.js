@@ -5,7 +5,7 @@ const { Pool } = require('pg');
 const CONFIG = {
     growthThresholds: { vsPrevious: 0.3, last1Hour: 0.8, last3Hours: 1.0, last12Hours: 3.0, last24Hours: 5.0 },
     telegram: { botToken: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID },
-    openai: { apiKey: process.env.OPENAI_API_KEY, model: 'gpt-4.1-nano' },
+    openai: { apiKey: process.env.OPENAI_API_KEY, model: 'gpt-4.1-nano-2025-04-14' },
     cleanupIntervalHours: 48, 
     apiPauseMs: 200,
     searchWindowMinutes: 10,
