@@ -1,4 +1,4 @@
-// get_holders_ethplorer.js (ФИНАЛЬНАЯ ВЕРСИЯ 4.2: НАСТРАИВАЕМАЯ ПАУЗА)
+// get_holders_ethplorer.js (ФИНАЛЬНАЯ ПРОИЗВОДСТВЕННАЯ ВЕРСИЯ)
 const axios = require('axios');
 const { Pool } = require('pg');
 
@@ -7,7 +7,7 @@ const CONFIG = {
     telegram: { botToken: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID },
     openai: { apiKey: process.env.OPENAI_API_KEY, model: 'gpt-4o' },
     cleanupIntervalHours: 24,
-    apiPauseMs: 2500, // Пауза между запросами к API в миллисекундах
+    apiPauseMs: 1000, // ИЗМЕНЕНИЕ: Пауза между запросами к API возвращена на 1000 мс
 };
 
 const pool = new Pool({
@@ -46,12 +46,16 @@ const pool = new Pool({
 
     await pool.query(`CREATE TABLE IF NOT EXISTS holders (id SERIAL PRIMARY KEY, contract TEXT NOT NULL, symbol TEXT, holders INTEGER, error TEXT, parsed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())`);
 
+    // ИЗМЕНЕНИЕ: Используем ваш персональный ключ из переменных окружения, если он есть
+    const apiKey = process.env.ETHPLORER_API_KEY || 'freekey';
+    console.log(`Используем API ключ: ${apiKey === 'freekey' ? 'публичный freekey' : 'персональный'}`);
+
     const newRecords = [];
     for (const contract of contracts) {
         if (!contract) continue;
         await new Promise(res => setTimeout(res, CONFIG.apiPauseMs)); 
         try {
-            const { data } = await axios.get(`https://api.ethplorer.io/getTokenInfo/${contract}?apiKey=freekey`);
+            const { data } = await axios.get(`https://api.ethplorer.io/getTokenInfo/${contract}?apiKey=${apiKey}`);
             if (data.address && data.symbol && data.holdersCount) {
                 newRecords.push({ contract: data.address, symbol: data.symbol, holders: data.holdersCount, error: "" });
             } else {
@@ -65,12 +69,12 @@ const pool = new Pool({
     console.log('Данные о холдерах успешно спарсены:');
     console.table(newRecords);
 
+    // ... (остальной код скрипта без изменений) ...
     for (const r of newRecords) {
         if (r.error || !r.contract) continue;
         await pool.query(`INSERT INTO holders(contract, symbol, holders, error) VALUES($1, $2, $3, $4)`, [r.contract, r.symbol, r.holders, r.error]);
     }
     console.log(`✅ ${newRecords.filter(r => !r.error).length} новых записей сохранено в базу.`);
-
     console.log('\n--- Начало анализа роста ---');
     for (const record of newRecords) {
         if (record.error || !record.holders || !record.contract) continue;
