@@ -5,7 +5,7 @@ const { Pool } = require('pg');
 const CONFIG = {
     growthThresholds: { vsPrevious: 0.3, last1Hour: 0.8, last3Hours: 1.0, last12Hours: 3.0, last24Hours: 5.0 },
     telegram: { botToken: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID },
-    openai: { apiKey: process.env.OPENAI_API_KEY, model: 'gpt-4o' },
+    openai: { apiKey: process.env.OPENAI_API_KEY, model: 'gpt-4o-2024-05-13' },
     cleanupIntervalHours: 48, 
     apiPauseMs: 200,
     searchWindowMinutes: 10,
@@ -199,7 +199,7 @@ async function sendOpenAIAlert(payload) { if (!CONFIG.openai.apiKey) { console.w
     * Рост за 3 часа: {GROWTH_3H}
     * Рост за 12 часов: {GROWTH_12H}
     * Рост за 24 часа: {GROWTH_24H}
-# ЗАДАЧИ ДЛЯ АНАЛИЗА (проработай каждый пункт)
+# ЗАДАЧИ ДЛЯ АНАЛИЗА (проработай каждый пункт и важно, чтобы это были актуальные данные на текущий момент)
 1.  **События и Медиа-фон:** Проанализируй последние новости, анонсы в официальных каналах (X/Twitter, Discord, Blog) и упоминания в ключевых крипто-СМИ за последнюю неделю. Есть ли конкретный инфоповод или событие, которое могло спровоцировать рост?
 2.  **Маркетинговая активность:** Оцени, не является ли рост результатом недавней маркетинговой кампании, Airdrop, конкурса или активной работы с инфлюенсерами.
 3.  **Приток пользователей (On-chain):** Подтверждается ли рост холдеров реальной активностью в сети? Кратко проанализируй динамику объемов торгов на DEX (Uniswap, Sushiswap), количество транзакций и число активных адресов за последние дни.
