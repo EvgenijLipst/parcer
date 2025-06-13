@@ -1,17 +1,16 @@
-// get_holders_ethplorer.js (ФИНАЛЬНАЯ ВЕРСИЯ 5.4: ОГРАНИЧЕНИЕ АЛЕРТОВ)
+// get_holders_ethplorer.js (ФИНАЛЬНАЯ ВЕРСИЯ 5.5: ОЧИСТКА ИСТОРИИ АЛЕРТОВ)
 const axios = require('axios');
 const { Pool } = require('pg');
 
 const CONFIG = {
     growthThresholds: { vsPrevious: 0.3, last1Hour: 0.8, last3Hours: 1.0, last12Hours: 3.0, last24Hours: 5.0 },
     telegram: { botToken: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID },
-    openai: { apiKey: process.env.OPENAI_API_KEY, model: 'gpt-4.1-nano-2025-04-14' },
+    openai: { apiKey: process.env.OPENAI_API_KEY, model: 'gpt-4o' },
     cleanupIntervalHours: 48, 
     apiPauseMs: 200,
     searchWindowMinutes: 10,
-    // НОВЫЕ НАСТРОЙКИ: Лимиты на алерты
-    alertLimitCount: 2,  // Максимум алертов
-    alertLimitHours: 24, // За какой период (в часах)
+    alertLimitCount: 2,
+    alertLimitHours: 24,
 };
 
 const pool = new Pool({
@@ -50,7 +49,6 @@ const pool = new Pool({
         console.log(`Получено ${contracts.length} контрактов для обработки.`);
 
         await pool.query(`CREATE TABLE IF NOT EXISTS holders (id SERIAL PRIMARY KEY, contract TEXT NOT NULL, symbol TEXT, holders INTEGER, error TEXT, parsed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())`);
-        // НОВОЕ: Создаем таблицу для истории алертов, если ее нет
         await pool.query(`
             CREATE TABLE IF NOT EXISTS alert_history (
                 contract TEXT PRIMARY KEY,
@@ -122,7 +120,6 @@ const pool = new Pool({
                 const shouldAlert = growth.vsPrevious >= CONFIG.growthThresholds.vsPrevious || growth.last1Hour >= CONFIG.growthThresholds.last1Hour || growth.last3Hours >= CONFIG.growthThresholds.last3Hours || growth.last12Hours >= CONFIG.growthThresholds.last12Hours || growth.last24Hours >= CONFIG.growthThresholds.last24Hours;
 
                 if (shouldAlert) {
-                    // НОВОЕ: Проверяем, можно ли отправлять алерт
                     const alertCheckQuery = `SELECT alert_count, first_alert_at FROM alert_history WHERE contract = $1`;
                     const { rows: [lastAlert] } = await pool.query(alertCheckQuery, [record.contract]);
 
@@ -171,8 +168,12 @@ const pool = new Pool({
         }
         console.log('--- Анализ роста завершен ---\n');
 
-        const deleteResult = await pool.query(`DELETE FROM holders WHERE parsed_at < NOW() - INTERVAL '${CONFIG.cleanupIntervalHours} hours'`);
-        console.log(`🧹 Удалено ${deleteResult.rowCount} старых записей.`);
+        const deleteHoldersResult = await pool.query(`DELETE FROM holders WHERE parsed_at < NOW() - INTERVAL '${CONFIG.cleanupIntervalHours} hours'`);
+        console.log(`🧹 Удалено ${deleteHoldersResult.rowCount} старых записей из 'holders'.`);
+        
+        // --- НОВОЕ ИЗМЕНЕНИЕ ЗДЕСЬ ---
+        const deleteAlertsResult = await pool.query(`DELETE FROM alert_history WHERE first_alert_at < NOW() - INTERVAL '${CONFIG.cleanupIntervalHours} hours'`);
+        console.log(`🧹 Удалено ${deleteAlertsResult.rowCount} старых записей из 'alert_history'.`);
         
         console.log('Все операции завершены. Закрываем соединение с базой...');
         await pool.end();
